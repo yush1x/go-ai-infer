@@ -56,7 +56,9 @@ func NewSearcher(eval inference.Evaluator, cfg Config) *Searcher
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `board` | `*board.Board` | 该节点对应的局面（独立深拷贝） |
+| `board` | `*board.Board` | 该节点对应的局面；非根节点首次被选中时才创建 |
+| `parent` | `*Node` | 父节点，用于延迟生成当前局面 |
+| `action` | `int` | 从父节点到当前节点的动作 |
 | `prior` | `float32` | CNN 输出的先验概率（已 mask + 归一化） |
 | `children` | `map[int]*Node` | 子节点映射：action → Node |
 | `visits` | `int32` | 访问次数 N |
@@ -150,7 +152,8 @@ Search(ctx, board)
   │       │       Q = -child.q()
   │       │       U = CPuct × prior × √N_parent / (1 + N_child)
   │       │
-  │       ├── 扩展（Expansion）：到达叶子 → CNN 推理 → mask → 归一化 → 创建子节点
+  │       ├── 扩展（Expansion）：到达叶子 → CNN 推理 → mask → 归一化 → 创建轻量子节点
+  │       │       └── 子节点首次被选中时才 Clone 棋盘并执行 Move
   │       │       └── 终局时：直接用 terminalValue()（tanh 目数差）
   │       │
   │       └── 回传（Backpropagation）：沿路径反向传播 value（negamax）
@@ -195,4 +198,3 @@ $$v = \tanh\left(\frac{black\\_lead}{15}\right), \quad black\\_lead = 黑目 - (
 |------|------|
 | `mcts.go` | 搜索主逻辑：Search、simulate、expand、pickMove、随机数工具函数 |
 | `node.go` | 树节点定义、动作编码常量、坐标转换 |
-

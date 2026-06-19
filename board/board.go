@@ -47,13 +47,29 @@ func New() *Board {
 }
 
 // 可选：给其他 package 用的大写 wrapper。
-func (cur *board) Round() int                     { return cur.round }
-func (cur *board) Mask() [Points]int              { return cur.mask() }
-func (cur *board) Move(x int, y int) int          { return cur.move(x, y) }
-func (cur *board) Tensor() inference.Features     { return cur.tensor() }
-func (cur *board) Score() [3]int                  { return cur.score() }
-func (cur *board) IsFinish() int                  { return cur.is_finish() }
-func (cur *board) IsEyes(x int, y int) int        { return cur.is_eyes(x, y) }
+func (cur *board) Round() int                 { return cur.round }
+func (cur *board) Mask() [Points]int          { return cur.mask() }
+func (cur *board) Move(x int, y int) int      { return cur.move(x, y) }
+func (cur *board) Tensor() inference.Features { return cur.tensor() }
+func (cur *board) Score() [3]int              { return cur.score() }
+func (cur *board) FinalResult() FinalResult   { return cur.finalResult() }
+func (cur *board) IsFinish() int              { return cur.is_finish() }
+func (cur *board) IsEyes(x int, y int) int    { return cur.is_eyes(x, y) }
+
+const (
+	OwnershipUnknown int8 = -1
+	OwnershipBlack   int8 = 0
+	OwnershipWhite   int8 = 1
+)
+
+// FinalResult 是按当前简化数目规则计算的终局结果。
+// Ownership 使用训练标签约定：0=黑，1=白，-1=中立/未知。
+type FinalResult struct {
+	Black     int
+	White     int
+	Neutral   int
+	Ownership [Points]int8
+}
 
 type group struct {
 	color      int
@@ -441,7 +457,16 @@ func (cur *board) tensor() inference.Features {
 // score 数目数，返回 [黑, 白, 中立]。
 // 时间复杂度 O(N)：每个空点最多入队一次，每个棋子直接计数一次。
 func (cur *board) score() [3]int {
-	var ans [3]int
+	result := cur.finalResult()
+	return [3]int{result.Black, result.White, result.Neutral}
+}
+
+// finalResult 同时计算总目数和逐点归属，保证 Score 与 Ownership 使用同一套规则。
+func (cur *board) finalResult() FinalResult {
+	var result FinalResult
+	for p := range result.Ownership {
+		result.Ownership[p] = OwnershipUnknown
+	}
 
 	b := &cur.boards[0]
 	var visited [Points]bool
@@ -450,12 +475,14 @@ func (cur *board) score() [3]int {
 
 	for p := 0; p < Points; p++ {
 		if b[p] == Black {
-			ans[0]++
+			result.Black++
+			result.Ownership[p] = OwnershipBlack
 			continue
 		}
 
 		if b[p] == White {
-			ans[1]++
+			result.White++
+			result.Ownership[p] = OwnershipWhite
 			continue
 		}
 
@@ -495,16 +522,23 @@ func (cur *board) score() [3]int {
 			}
 		}
 
+		owner := OwnershipUnknown
 		if hasBlack && !hasWhite {
-			ans[0] += cnt
+			result.Black += cnt
+			owner = OwnershipBlack
 		} else if hasWhite && !hasBlack {
-			ans[1] += cnt
+			result.White += cnt
+			owner = OwnershipWhite
 		} else {
-			ans[2] += cnt
+			result.Neutral += cnt
+		}
+
+		for i := 0; i < tail; i++ {
+			result.Ownership[queue[i]] = owner
 		}
 	}
 
-	return ans
+	return result
 }
 
 // is_finish 判断是否连续两手 pass。

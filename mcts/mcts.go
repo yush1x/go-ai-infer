@@ -67,7 +67,7 @@ func (s *Searcher) Search(ctx context.Context, b *board.Board) (*SearchResult, e
 	round := b.Round() // 等价于 Python 的 len(moves)，用于自博弈温度切换
 
 	// ---- 第一轮：正常 MCTS（pass_bonus = 0）----
-	root := newNode(b, 0)
+	root := newRootNode(b)
 	rootValue, err := s.expand(ctx, root, s.cfg.SelfPlay)
 	if err != nil {
 		return nil, err
@@ -83,7 +83,7 @@ func (s *Searcher) Search(ctx context.Context, b *board.Board) (*SearchResult, e
 
 	// ---- 第二轮：若启用 pass_bonus 且前 3 热门非 pass 走法全是眼，重做 ----
 	if s.cfg.PassBonus > 0 && topMovesAllEye(root, b, 3) {
-		root2 := newNode(b, 0)
+		root2 := newRootNode(b)
 		if _, err := s.expand(ctx, root2, s.cfg.SelfPlay); err != nil {
 			return nil, err
 		}
@@ -140,6 +140,9 @@ func (s *Searcher) simulate(ctx context.Context, root *Node, passBonus float32) 
 			break // 理论上不会发生：pass 恒在
 		}
 		node = node.children[bestAction]
+		if err := node.ensureBoard(); err != nil {
+			return err
+		}
 		path = append(path, node)
 	}
 
@@ -215,17 +218,10 @@ func (s *Searcher) expand(ctx context.Context, node *Node, addNoise bool) (float
 		}
 	}
 
-	// ⑤ 创建子节点：规则检查、提子、打劫都交给 board.Move；用 Clone 保证历史隔离。
+	// ⑤ 只创建轻量子节点。棋盘在子节点首次被选中时再 Clone + Move。
 	node.children = make(map[int]*Node, len(legal))
 	for _, a := range legal {
-		child := b.Clone()
-		if a == PassAction {
-			child.Move(-1, -1)
-		} else {
-			x, y := actionToXY(a)
-			child.Move(x, y)
-		}
-		node.children[a] = newNode(child, priors[a])
+		node.children[a] = newChildNode(node, a, priors[a])
 	}
 
 	return eval.Value, nil
@@ -313,7 +309,7 @@ func terminalValue(b *board.Board) float32 {
 	s := b.Score() // [黑目, 白目, 中立]，不含贴目
 	blackLead := float64(s[0]) - (float64(s[1]) + komi)
 	v := float32(math.Tanh(blackLead / valueScale)) // = score_to_value(score)
-	if b.Round()%2 == 0 {                            // 偶数手轮到黑走
+	if b.Round()%2 == 0 {                           // 偶数手轮到黑走
 		return v
 	}
 	return -v

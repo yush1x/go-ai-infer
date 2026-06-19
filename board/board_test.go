@@ -613,6 +613,48 @@ func TestScore_TotalAlways361(t *testing.T) {
 	}
 }
 
+func TestFinalResult_OwnershipMatchesScore(t *testing.T) {
+	stones := map[int]int{
+		idx(0, 1):   Black,
+		idx(1, 0):   Black,
+		idx(1, 2):   Black,
+		idx(2, 1):   Black,
+		idx(10, 10): White,
+	}
+	b := newBoardWithStones(stones)
+
+	result := b.FinalResult()
+	score := b.Score()
+	if result.Black != score[0] || result.White != score[1] || result.Neutral != score[2] {
+		t.Fatalf("FinalResult totals [%d,%d,%d] do not match Score %v",
+			result.Black, result.White, result.Neutral, score)
+	}
+	if got := result.Ownership[idx(1, 1)]; got != OwnershipBlack {
+		t.Errorf("surrounded point ownership=%d, want black", got)
+	}
+	if got := result.Ownership[idx(10, 10)]; got != OwnershipWhite {
+		t.Errorf("white stone ownership=%d, want white", got)
+	}
+
+	var black, white, unknown int
+	for _, owner := range result.Ownership {
+		switch owner {
+		case OwnershipBlack:
+			black++
+		case OwnershipWhite:
+			white++
+		case OwnershipUnknown:
+			unknown++
+		default:
+			t.Fatalf("invalid ownership label %d", owner)
+		}
+	}
+	if black != result.Black || white != result.White || unknown != result.Neutral {
+		t.Errorf("ownership counts [%d,%d,%d] do not match totals [%d,%d,%d]",
+			black, white, unknown, result.Black, result.White, result.Neutral)
+	}
+}
+
 // ============================================================================
 // 6. is_finish 测试
 // ============================================================================
