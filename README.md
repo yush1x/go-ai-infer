@@ -2,6 +2,18 @@
 
 使用 Go 实现围棋自博弈数据生成流程。Python 负责神经网络训练和推理，Go 负责棋盘规则、MCTS、自博弈并发以及训练数据生成。
 
+## 运行
+
+先启动 Python 推理和训练数据保存服务，并确认 `main.go` 顶部的服务地址和运行参数正确。
+
+在项目根目录执行：
+
+```bash
+go run .
+```
+
+程序会自动运行指定数量的自博弈棋局、提交训练数据并输出最终统计。按 `Ctrl+C` 可以停止运行。
+
 ## 整体结构
 
 项目分为 5 个主要模块：
@@ -58,6 +70,7 @@
 - 创建并共享 Inference batcher
 - 并发运行多个 SelfPlay
 - 控制棋局数量和 CPU 并发度
+- 将正常结束的棋局提交给 Python 保存服务
 - 管理配置、日志、错误、取消和优雅退出
 - 汇总生成棋局和训练样本的统计信息
 
@@ -86,10 +99,12 @@ Runner 启动多个 SelfPlay
     -> Inference 合并请求并调用 Python CNN
     -> MCTS 根据推理结果完成搜索
     -> SelfPlay 执行动作并记录训练样本
-    -> 棋局结束后补充终局标签并保存数据
+    -> 棋局结束后补充终局标签
+    -> Runner 将完整棋局提交给 Python 保存服务
 ```
 
 ## 相关文档
 
 - [项目模型与训练流程](docs/overview.md)
 - [Python 推理服务二进制协议](docs/inference_protocol.md)
+- [SelfPlay 训练数据提交协议](docs/selfplay_storage_protocol.md)

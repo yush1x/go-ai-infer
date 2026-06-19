@@ -12,11 +12,13 @@ import (
 
 // Batcher 超参数集中放在文件开头，后续可以直接调整默认值。
 const (
-	EnableBatchLog   = true // 改为 false 即可关闭所有 batch 日志。
 	DefaultBatchSize = 32
 	DefaultMaxWait   = 5 * time.Millisecond
 	DefaultQueueSize = 128
 )
+
+// EnableBatchLog 控制推理 batch 的发送和完成日志，可由 main 在启动时配置。
+var EnableBatchLog = true
 
 var ErrClosed = errors.New("inference: batcher is closed")
 
