@@ -19,11 +19,12 @@ const (
 
 // Config MCTS 配置，字段语义对齐 Python select_move_with_policy 的参数。
 type Config struct {
-	NumSimulations int     // 每轮模拟次数（默认 200）
-	CPuct          float32 // PUCT 探索常数（默认 1.5）
-	SelfPlay       bool    // 自博弈：根节点加 Dirichlet 噪声，且前 30 手按访问概率采样
-	DirichletAlpha float32 // Dirichlet 浓度参数（默认 0.03）
-	DirichletEps   float32 // Dirichlet 噪声权重（默认 0.25）
+	NumSimulations  int     // 每轮模拟次数（默认 200）
+	CPuct           float32 // PUCT 探索常数（默认 1.5）
+	SelfPlay        bool    // 自博弈：根节点加 Dirichlet 噪声，且前 30 手按访问概率采样
+	DirichletAlpha  float32 // Dirichlet 浓度参数（默认 0.03）
+	DirichletEps    float32 // Dirichlet 噪声权重（默认 0.25）
+	PassPolicyFloor float32 // 归一化前 pass policy 的最低值；0 表示关闭
 
 	// PassBonus 对应 Python 的 pass_bonus。
 	// > 0 时启用两段式：先正常搜一轮，若访问最高的前 3 个非 pass 走法全是己方眼，
@@ -34,12 +35,13 @@ type Config struct {
 // DefaultConfig 返回与 Python 默认参数对齐的配置。
 func DefaultConfig() Config {
 	return Config{
-		NumSimulations: 200,
-		CPuct:          1.5,
-		SelfPlay:       false,
-		DirichletAlpha: 0.03,
-		DirichletEps:   0.25,
-		PassBonus:      0.0,
+		NumSimulations:  200,
+		CPuct:           1.5,
+		SelfPlay:        false,
+		DirichletAlpha:  0.03,
+		DirichletEps:    0.25,
+		PassPolicyFloor: 0,
+		PassBonus:       0.0,
 	}
 }
 
@@ -200,6 +202,11 @@ func (s *Searcher) expand(ctx context.Context, node *Node, addNoise bool) (float
 		for i, a := range legal {
 			priors[a] = (1-s.cfg.DirichletEps)*priors[a] + s.cfg.DirichletEps*noise[i]
 		}
+	}
+
+	// 在过滤非法动作和添加根节点噪声之后，为 pass 保留最低探索权重。
+	if priors[PassAction] < s.cfg.PassPolicyFloor {
+		priors[PassAction] = s.cfg.PassPolicyFloor
 	}
 
 	// ④ 归一化（仅 legal；和 <= 0 则均匀分布）。

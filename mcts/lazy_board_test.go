@@ -19,6 +19,39 @@ func (uniformEvaluator) Evaluate(context.Context, inference.Features) (inference
 	return eval, nil
 }
 
+type passFloorEvaluator struct{}
+
+func (passFloorEvaluator) Evaluate(context.Context, inference.Features) (inference.Evaluation, error) {
+	var eval inference.Evaluation
+	eval.Policy[0] = 0.5
+	return eval, nil
+}
+
+func TestExpandAppliesPassPolicyFloorBeforeNormalization(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.PassPolicyFloor = 0.5
+	searcher := NewSearcher(passFloorEvaluator{}, cfg)
+	root := newRootNode(board.New())
+
+	if _, err := searcher.expand(context.Background(), root, false); err != nil {
+		t.Fatalf("expand root: %v", err)
+	}
+
+	var sum float32
+	for _, child := range root.children {
+		sum += child.prior
+	}
+	if sum < 0.9999 || sum > 1.0001 {
+		t.Fatalf("normalized prior sum=%f, want 1", sum)
+	}
+	if got := root.children[PassAction].prior; got != 0.5 {
+		t.Fatalf("pass prior=%f, want 0.5", got)
+	}
+	if got := root.children[0].prior; got != 0.5 {
+		t.Fatalf("action 0 prior=%f, want 0.5", got)
+	}
+}
+
 func TestExpandCreatesLazyChildBoards(t *testing.T) {
 	searcher := NewSearcher(uniformEvaluator{}, DefaultConfig())
 	root := newRootNode(board.New())

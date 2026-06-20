@@ -7,7 +7,9 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
+	"unsafe"
 
 	"go-ai-infer/inference"
 	"go-ai-infer/runner"
@@ -17,6 +19,8 @@ const (
 	dashboardRefreshInterval = 500 * time.Millisecond
 	textSummaryInterval      = 10 * time.Second
 	latencyWindowSize        = 2048
+	gameCellWidth            = 24
+	defaultTerminalWidth     = 80
 )
 
 type gameDisplay struct {
@@ -40,6 +44,7 @@ type dashboard struct {
 	latencySum    time.Duration
 	latencies     []time.Duration
 	latencyNext   int
+	renderedLines int
 
 	stop chan struct{}
 	done chan struct{}
@@ -159,27 +164,66 @@ func (d *dashboard) run() {
 }
 
 func (d *dashboard) renderLocked(final bool) {
-	fmt.Fprintln(d.out, d.selfplaySummaryLocked())
-	fmt.Fprintln(d.out, d.batchSummaryLocked())
-	fmt.Fprintln(d.out)
-	for i, game := range d.games {
-		fmt.Fprintf(d.out, "#%03d  %-14s %3d步\x1b[K\n", i+1, displayStatus(game.status), game.moves)
+	lines := []string{
+		d.selfplaySummaryLocked(),
+		d.batchSummaryLocked(),
+		"",
 	}
+	lines = append(lines, d.gameLinesLocked(terminalWidth(d.out))...)
+
+	for _, line := range lines {
+		fmt.Fprintf(d.out, "%s\x1b[K\n", line)
+	}
+	d.renderedLines = len(lines)
 	if !final {
 		fmt.Fprint(d.out, "\x1b[K")
 	}
 }
 
 func (d *dashboard) clearLocked() {
-	lines := len(d.games) + 3
-	fmt.Fprintf(d.out, "\x1b[%dA", lines)
-	for i := 0; i < lines; i++ {
+	if d.renderedLines == 0 {
+		return
+	}
+	fmt.Fprintf(d.out, "\x1b[%dA", d.renderedLines)
+	for i := 0; i < d.renderedLines; i++ {
 		fmt.Fprint(d.out, "\r\x1b[2K")
-		if i < lines-1 {
+		if i < d.renderedLines-1 {
 			fmt.Fprint(d.out, "\x1b[1B")
 		}
 	}
-	fmt.Fprintf(d.out, "\x1b[%dA\r", lines-1)
+	if d.renderedLines > 1 {
+		fmt.Fprintf(d.out, "\x1b[%dA", d.renderedLines-1)
+	}
+	fmt.Fprint(d.out, "\r")
+	d.renderedLines = 0
+}
+
+func (d *dashboard) gameLinesLocked(width int) []string {
+	columns := width / gameCellWidth
+	if columns < 1 {
+		columns = 1
+	}
+
+	rows := (len(d.games) + columns - 1) / columns
+	lines := make([]string, 0, rows)
+	for start := 0; start < len(d.games); start += columns {
+		end := start + columns
+		if end > len(d.games) {
+			end = len(d.games)
+		}
+
+		cells := make([]string, 0, end-start)
+		for i := start; i < end; i++ {
+			game := d.games[i]
+			cell := fmt.Sprintf("#%03d %s %d步", i+1, displayStatus(game.status), game.moves)
+			if i < end-1 {
+				cell = padDisplayWidth(cell, gameCellWidth-3)
+			}
+			cells = append(cells, cell)
+		}
+		lines = append(lines, strings.Join(cells, " | "))
+	}
+	return lines
 }
 
 func (d *dashboard) selfplaySummaryLocked() string {
@@ -283,4 +327,49 @@ func formatLatency(duration time.Duration) string {
 		return duration.Round(time.Microsecond).String()
 	}
 	return duration.Round(100 * time.Microsecond).String()
+}
+
+func padDisplayWidth(value string, width int) string {
+	padding := width - displayWidth(value)
+	if padding <= 0 {
+		return value
+	}
+	return value + strings.Repeat(" ", padding)
+}
+
+func displayWidth(value string) int {
+	width := 0
+	for _, r := range value {
+		if r >= 0x2E80 {
+			width += 2
+		} else {
+			width++
+		}
+	}
+	return width
+}
+
+func terminalWidth(out io.Writer) int {
+	file, ok := out.(*os.File)
+	if !ok {
+		return defaultTerminalWidth
+	}
+
+	type winsize struct {
+		rows    uint16
+		columns uint16
+		x       uint16
+		y       uint16
+	}
+	size := winsize{}
+	_, _, errno := syscall.Syscall(
+		syscall.SYS_IOCTL,
+		file.Fd(),
+		uintptr(syscall.TIOCGWINSZ),
+		uintptr(unsafe.Pointer(&size)),
+	)
+	if errno != 0 || size.columns == 0 {
+		return defaultTerminalWidth
+	}
+	return int(size.columns)
 }
