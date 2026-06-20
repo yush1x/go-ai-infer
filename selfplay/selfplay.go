@@ -10,8 +10,11 @@ import (
 	"go-ai-infer/mcts"
 )
 
-// MaxMoves 是单盘自博弈允许执行的最大手数，方便后续直接调整。
-const MaxMoves = 400
+// DefaultMaxMoves 是单盘自博弈默认允许执行的最大手数。
+const DefaultMaxMoves = 400
+
+// MaxMoves 保留为兼容旧调用；新代码应通过 PlayConfig.MaxMoves 配置。
+const MaxMoves = DefaultMaxMoves
 
 // Komi 与当前 MCTS 使用的固定规则一致。
 const Komi float32 = 7.5
@@ -19,6 +22,15 @@ const Komi float32 = 7.5
 // Searcher 是 SelfPlay 对 MCTS 的最小依赖。
 type Searcher interface {
 	Search(ctx context.Context, b *board.Board) (*mcts.SearchResult, error)
+}
+
+type PlayConfig struct {
+	MaxMoves int
+	OnMove   func(move int)
+}
+
+func DefaultPlayConfig() PlayConfig {
+	return PlayConfig{MaxMoves: DefaultMaxMoves}
 }
 
 type Status string
@@ -66,19 +78,27 @@ type Result struct {
 // Play 从空棋盘开始生成一盘自博弈棋局。
 // 它不负责并发调度、日志或 HDF5 写入。
 func Play(ctx context.Context, searcher Searcher) Result {
+	return PlayWithConfig(ctx, searcher, DefaultPlayConfig())
+}
+
+// PlayWithConfig 从空棋盘开始生成一盘可配置的自博弈棋局。
+func PlayWithConfig(ctx context.Context, searcher Searcher, config PlayConfig) Result {
 	if ctx == nil {
 		return failure(StatusSearchFailed, 0, -1, errors.New("selfplay: context is nil"))
 	}
 	if searcher == nil {
 		return failure(StatusSearchFailed, 0, -1, errors.New("selfplay: searcher is nil"))
 	}
+	if config.MaxMoves <= 0 {
+		return failure(StatusSearchFailed, 0, -1, errors.New("selfplay: max moves must be positive"))
+	}
 
 	b := board.New()
-	samples := make([]Sample, 0, MaxMoves)
-	actions := make([]int, 0, MaxMoves)
+	samples := make([]Sample, 0, config.MaxMoves)
+	actions := make([]int, 0, config.MaxMoves)
 	lastAction := -1
 
-	for move := 0; move < MaxMoves; move++ {
+	for move := 0; move < config.MaxMoves; move++ {
 		if err := ctx.Err(); err != nil {
 			return failure(StatusCanceled, move, lastAction, err)
 		}
@@ -120,6 +140,9 @@ func Play(ctx context.Context, searcher Searcher) Result {
 		samples = append(samples, sample)
 		actions = append(actions, action)
 		lastAction = action
+		if config.OnMove != nil {
+			config.OnMove(len(actions))
+		}
 
 		if b.IsFinish() == 1 {
 			game := finishGame(samples, actions, b.FinalResult())
@@ -134,9 +157,9 @@ func Play(ctx context.Context, searcher Searcher) Result {
 
 	return failure(
 		StatusMaxMoves,
-		MaxMoves,
+		config.MaxMoves,
 		lastAction,
-		fmt.Errorf("selfplay: game did not finish within %d moves", MaxMoves),
+		fmt.Errorf("selfplay: game did not finish within %d moves", config.MaxMoves),
 	)
 }
 

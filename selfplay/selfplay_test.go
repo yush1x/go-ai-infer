@@ -112,6 +112,23 @@ func TestPlayDiscardsGameAtMaxMoves(t *testing.T) {
 	}
 }
 
+func TestPlayUsesConfiguredMaxMovesAndReportsProgress(t *testing.T) {
+	var moves []int
+	result := PlayWithConfig(context.Background(), &maxMovesSearcher{}, PlayConfig{
+		MaxMoves: 3,
+		OnMove: func(move int) {
+			moves = append(moves, move)
+		},
+	})
+
+	if result.Status != StatusMaxMoves || result.Moves != 3 {
+		t.Fatalf("status=%s moves=%d, want max_moves at 3", result.Status, result.Moves)
+	}
+	if len(moves) != 3 || moves[0] != 1 || moves[1] != 2 || moves[2] != 3 {
+		t.Fatalf("progress=%v, want [1 2 3]", moves)
+	}
+}
+
 func TestPlayRejectsIllegalAction(t *testing.T) {
 	searcher := &scriptedSearcher{actions: []int{-1}}
 	result := Play(context.Background(), searcher)

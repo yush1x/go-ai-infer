@@ -120,6 +120,28 @@ func TestBatcherReturnsPredictorErrorToWholeBatch(t *testing.T) {
 	}
 }
 
+func TestBatcherReportsCompletedBatch(t *testing.T) {
+	predictor := &recordingPredictor{}
+	batcher := newTestBatcher(t, predictor, BatcherConfig{
+		BatchSize: 1,
+		MaxWait:   time.Second,
+		QueueSize: 1,
+	})
+
+	events := make(chan BatchEvent, 1)
+	batcher.SetObserver(func(event BatchEvent) {
+		events <- event
+	})
+
+	if _, err := batcher.Evaluate(context.Background(), Features{}); err != nil {
+		t.Fatal(err)
+	}
+	event := <-events
+	if event.Size != 1 || event.Capacity != 1 || event.Duration <= 0 || event.Err != nil {
+		t.Fatalf("unexpected batch event: %+v", event)
+	}
+}
+
 func TestBatcherEvaluateHonorsContextCancellation(t *testing.T) {
 	predictor := &recordingPredictor{}
 	batcher := newTestBatcher(t, predictor, BatcherConfig{

@@ -15,19 +15,21 @@ import (
 )
 
 const (
-	totalGames      = 100 // 本次运行需要生成的总棋局数
-	gameConcurrency = 8   // 同时进行自博弈的棋局数
+	totalGames      = 16  // 本次运行需要生成的总棋局数
+	gameConcurrency = 10  // 同时进行自博弈的棋局数
+	maxMoves        = 400 // 单局最大步数；达到后仍未结束则丢弃该局，不保存
 
-	numSimulations = 200           // 每一步 MCTS 搜索执行的模拟次数
+	numSimulations = 50            // 每一步 MCTS 搜索执行的模拟次数
 	cPuct          = float32(1.5)  // MCTS 在利用和探索之间的平衡系数
 	dirichletAlpha = float32(0.03) // 自博弈根节点 Dirichlet 噪声分布参数
 	dirichletEps   = float32(0.25) // 自博弈根节点混入随机噪声的比例
-	passBonus      = float32(0.0)  // 热门落点均为己方眼时给予 pass 的额外分数
+	// passBonus 只在热门非 pass 走法均为己方眼时，加到 pass 的 PUCT 分数上。
+	// 0 表示关闭；必须 >= 0，没有硬上限。建议从 0.05~0.5 开始，超过 1 通常很强。
+	passBonus = float32(0.8)
 
-	inferenceBatchSize = 32                   // Python 单次批量推理的最大局面数
+	inferenceBatchSize = 8                    // Python 单次批量推理的最大局面数
 	inferenceMaxWait   = 5 * time.Millisecond // 推理 batch 未满时的最大等待时间
 	inferenceQueueSize = 128                  // 等待批量推理的最大请求数量
-	enableBatchLog     = true                 // 是否输出每次推理 batch 的发送和完成日志
 
 	predictURL = "http://127.0.0.1:8000/predict"       // Python 模型推理接口地址
 	storageURL = "http://127.0.0.1:8000/selfplay/game" // Python 训练数据保存接口地址
@@ -52,7 +54,7 @@ func run() error {
 		return fmt.Errorf("create inference client: %w", err)
 	}
 
-	inference.EnableBatchLog = enableBatchLog
+	inference.EnableBatchLog = false
 	batchConfig := inference.BatcherConfig{
 		BatchSize: inferenceBatchSize,
 		MaxWait:   inferenceMaxWait,
@@ -86,36 +88,30 @@ func run() error {
 	runConfig := runner.Config{
 		Games:       totalGames,
 		Concurrency: gameConcurrency,
+		MaxMoves:    maxMoves,
 	}
+	status := newDashboard(os.Stderr, totalGames, inferenceBatchSize)
+	batcher.SetObserver(status.OnBatchEvent)
+	runConfig.OnGameEvent = status.OnGameEvent
 	selfplayRunner, err := runner.New(searcher, storage, runConfig)
 	if err != nil {
 		return fmt.Errorf("create runner: %w", err)
 	}
+	selfplayRunner.SetLogger(nil)
 
-	log.Printf(
-		"start selfplay: games=%d concurrency=%d simulations=%d batch_size=%d",
+	fmt.Fprintf(
+		os.Stderr,
+		"Started   games=%d concurrency=%d max_moves=%d simulations=%d batch=%d max_wait=%s\n",
 		totalGames,
 		gameConcurrency,
+		maxMoves,
 		numSimulations,
 		inferenceBatchSize,
+		inferenceMaxWait,
 	)
-
+	status.Start()
 	stats, runErr := selfplayRunner.Run(ctx)
-	log.Printf(
-		"selfplay finished: requested=%d started=%d completed=%d saved=%d save_failed=%d "+
-			"max_moves=%d search_failed=%d illegal_action=%d canceled=%d samples=%d duration=%s",
-		stats.Requested,
-		stats.Started,
-		stats.Completed,
-		stats.Saved,
-		stats.SaveFailed,
-		stats.MaxMoves,
-		stats.SearchFailed,
-		stats.IllegalAction,
-		stats.Canceled,
-		stats.Samples,
-		stats.Duration,
-	)
+	status.Stop(stats)
 	if runErr != nil {
 		return fmt.Errorf("run selfplay: %w", runErr)
 	}

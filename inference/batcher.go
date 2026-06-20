@@ -28,6 +28,13 @@ type BatcherConfig struct {
 	QueueSize int
 }
 
+type BatchEvent struct {
+	Size     int
+	Capacity int
+	Duration time.Duration
+	Err      error
+}
+
 func DefaultBatcherConfig() BatcherConfig {
 	return BatcherConfig{
 		BatchSize: DefaultBatchSize,
@@ -60,6 +67,7 @@ type Batcher struct {
 	submitMu  sync.RWMutex // 保证 Close 之后不会再有请求成功进入队列。
 	closed    atomic.Bool
 	closeOnce sync.Once
+	observer  func(BatchEvent)
 }
 
 func NewBatcher(predictor BatchPredictor, config BatcherConfig) (*Batcher, error) {
@@ -88,6 +96,11 @@ func NewBatcher(predictor BatchPredictor, config BatcherConfig) (*Batcher, error
 
 	go b.run()
 	return b, nil
+}
+
+// SetObserver 注册 batch 完成回调。应在开始提交请求前调用。
+func (b *Batcher) SetObserver(observer func(BatchEvent)) {
+	b.observer = observer
 }
 
 func (b *Batcher) Evaluate(ctx context.Context, features Features) (Evaluation, error) {
@@ -221,8 +234,14 @@ func (b *Batcher) executeBatch(batch []evaluateRequest) {
 	}
 
 	results, err := b.predictor.Predict(b.runCtx, features)
+	duration := time.Since(startedAt)
 	if EnableBatchLog {
-		log.Printf("inference finished: size=%d duration=%s err=%v", len(batch), time.Since(startedAt), err)
+		log.Printf("inference finished: size=%d duration=%s err=%v", len(batch), duration, err)
+	}
+	if b.observer != nil {
+		b.observer(BatchEvent{
+			Size: len(batch), Capacity: b.config.BatchSize, Duration: duration, Err: err,
+		})
 	}
 	if err != nil {
 		b.replyError(batch, fmt.Errorf("inference: batch predict: %w", err))

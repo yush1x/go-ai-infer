@@ -61,7 +61,7 @@ func (c *HTTPStorageClient) SaveGame(ctx context.Context, game *selfplay.Game) e
 		return errors.New("runner: game is nil")
 	}
 	n := len(game.Samples)
-	if n <= 0 || n > selfplay.MaxMoves {
+	if n <= 0 {
 		return fmt.Errorf("runner: invalid sample count %d", n)
 	}
 

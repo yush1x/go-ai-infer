@@ -19,13 +19,23 @@ const (
 type Config struct {
 	Games       int
 	Concurrency int
+	MaxMoves    int
+	OnGameEvent func(GameEvent)
 }
 
 func DefaultConfig() Config {
 	return Config{
 		Games:       DefaultGames,
 		Concurrency: DefaultConcurrency,
+		MaxMoves:    selfplay.DefaultMaxMoves,
 	}
+}
+
+type GameEvent struct {
+	Game   int
+	Status string
+	Moves  int
+	Err    error
 }
 
 // GameSaver 负责把一盘正常结束的棋提交给 Python 保存服务。
@@ -69,6 +79,12 @@ func New(searcher selfplay.Searcher, saver GameSaver, config Config) (*Runner, e
 	if config.Concurrency <= 0 {
 		return nil, errors.New("runner: concurrency must be positive")
 	}
+	if config.MaxMoves == 0 {
+		config.MaxMoves = selfplay.DefaultMaxMoves
+	}
+	if config.MaxMoves < 0 {
+		return nil, errors.New("runner: max moves must be positive")
+	}
 	if config.Concurrency > config.Games {
 		config.Concurrency = config.Games
 	}
@@ -108,7 +124,13 @@ func (r *Runner) Run(ctx context.Context) (Stats, error) {
 		go func() {
 			defer workers.Done()
 			for index := range jobs {
-				result := selfplay.Play(ctx, r.searcher)
+				r.emit(GameEvent{Game: index, Status: "running"})
+				result := selfplay.PlayWithConfig(ctx, r.searcher, selfplay.PlayConfig{
+					MaxMoves: r.config.MaxMoves,
+					OnMove: func(move int) {
+						r.emit(GameEvent{Game: index, Status: "running", Moves: move})
+					},
+				})
 				results <- gameResult{index: index, result: result}
 			}
 		}()
@@ -138,31 +160,44 @@ func (r *Runner) Run(ctx context.Context) (Stats, error) {
 			stats.Completed++
 			if result.Game == nil {
 				stats.SaveFailed++
+				r.emit(GameEvent{Game: item.index, Status: "save_failed", Moves: result.Moves})
 				r.logf("runner: game=%d completed with nil game", item.index)
 				continue
 			}
+			r.emit(GameEvent{Game: item.index, Status: "saving", Moves: result.Moves})
 			if err := r.saver.SaveGame(ctx, result.Game); err != nil {
 				stats.SaveFailed++
+				r.emit(GameEvent{
+					Game: item.index, Status: "save_failed", Moves: result.Moves, Err: err,
+				})
 				r.logf("runner: game=%d save failed: %v", item.index, err)
 				continue
 			}
 			stats.Saved++
 			stats.Samples += len(result.Game.Samples)
+			r.emit(GameEvent{Game: item.index, Status: "completed", Moves: result.Moves})
 
 		case selfplay.StatusMaxMoves:
 			stats.MaxMoves++
+			r.emitResult(item.index, result)
 			r.logFailure(item.index, result)
 		case selfplay.StatusSearchFailed:
 			stats.SearchFailed++
+			r.emitResult(item.index, result)
 			r.logFailure(item.index, result)
 		case selfplay.StatusIllegalAction:
 			stats.IllegalAction++
+			r.emitResult(item.index, result)
 			r.logFailure(item.index, result)
 		case selfplay.StatusCanceled:
 			stats.Canceled++
+			r.emitResult(item.index, result)
 			r.logFailure(item.index, result)
 		default:
 			stats.SearchFailed++
+			r.emit(GameEvent{
+				Game: item.index, Status: "failed", Moves: result.Moves, Err: result.Err,
+			})
 			r.logf("runner: game=%d unknown status=%q moves=%d err=%v",
 				item.index, result.Status, result.Moves, result.Err)
 		}
@@ -180,6 +215,18 @@ func (r *Runner) Run(ctx context.Context) (Stats, error) {
 		)
 	}
 	return stats, nil
+}
+
+func (r *Runner) emitResult(index int, result selfplay.Result) {
+	r.emit(GameEvent{
+		Game: index, Status: string(result.Status), Moves: result.Moves, Err: result.Err,
+	})
+}
+
+func (r *Runner) emit(event GameEvent) {
+	if r.config.OnGameEvent != nil {
+		r.config.OnGameEvent(event)
+	}
 }
 
 func (r *Runner) logFailure(index int, result selfplay.Result) {
