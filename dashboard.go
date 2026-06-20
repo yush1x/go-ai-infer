@@ -91,7 +91,7 @@ func (d *dashboard) Stop(stats runner.Stats) {
 		"Finished  requested=%d saved=%d failed=%d samples=%d duration=%s\n",
 		stats.Requested,
 		stats.Saved,
-		stats.SaveFailed+stats.MaxMoves+stats.SearchFailed+stats.IllegalAction+stats.Canceled,
+		stats.SaveFailed+stats.SearchFailed+stats.IllegalAction+stats.Canceled,
 		stats.Samples,
 		formatDuration(stats.Duration),
 	)

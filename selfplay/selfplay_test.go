@@ -96,16 +96,19 @@ func (s *maxMovesSearcher) Search(_ context.Context, b *board.Board) (*mcts.Sear
 	return &mcts.SearchResult{Action: action, VisitProbs: policy}, nil
 }
 
-func TestPlayDiscardsGameAtMaxMoves(t *testing.T) {
+func TestPlayFinalizesGameAtMaxMoves(t *testing.T) {
 	result := Play(context.Background(), &maxMovesSearcher{})
 	if result.Status != StatusMaxMoves {
 		t.Fatalf("status=%s err=%v, want max_moves", result.Status, result.Err)
 	}
-	if result.Game != nil {
-		t.Fatal("max-moves result must not expose training samples")
+	if result.Game == nil {
+		t.Fatal("max-moves result must contain training samples")
 	}
 	if result.Moves != MaxMoves {
 		t.Errorf("moves=%d, want %d", result.Moves, MaxMoves)
+	}
+	if got := len(result.Game.Samples); got != MaxMoves {
+		t.Errorf("samples=%d, want %d", got, MaxMoves)
 	}
 	if result.Err == nil {
 		t.Error("max-moves result should contain a diagnostic error")
@@ -123,6 +126,9 @@ func TestPlayUsesConfiguredMaxMovesAndReportsProgress(t *testing.T) {
 
 	if result.Status != StatusMaxMoves || result.Moves != 3 {
 		t.Fatalf("status=%s moves=%d, want max_moves at 3", result.Status, result.Moves)
+	}
+	if result.Game == nil || len(result.Game.Samples) != 3 {
+		t.Fatalf("max-moves game=%v, want 3 samples", result.Game)
 	}
 	if len(moves) != 3 || moves[0] != 1 || moves[1] != 2 || moves[2] != 3 {
 		t.Fatalf("progress=%v, want [1 2 3]", moves)

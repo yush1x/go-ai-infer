@@ -47,9 +47,14 @@ func DefaultConfig() Config {
 
 // SearchResult 搜索结果。
 type SearchResult struct {
-	Action     int                 // 最终动作：0..360 为落子点，361 为 pass
-	VisitProbs [PolicySize]float32 // 362 维：各动作访问次数 / 总访问数（对外返回向量）
-	RootValue  float32             // 根节点平均价值
+	Action           int                 // 最终动作：0..360 为落子点，361 为 pass
+	VisitProbs       [PolicySize]float32 // 362 维：各动作访问次数 / 总访问数（对外返回向量）
+	RootValue        float32             // 根节点平均价值
+	RawPassPolicy    float32             // 模型输出的原始 pass policy
+	PassPrior        float32             // mask、噪声、floor、归一化后的 pass prior
+	PassVisits       int32               // pass 子节点访问次数
+	TotalVisits      int32               // 根节点全部子节点访问次数
+	PassBonusApplied bool                // 是否触发了 pass bonus 第二轮搜索
 }
 
 // Searcher MCTS 搜索器。
@@ -93,6 +98,7 @@ func (s *Searcher) Search(ctx context.Context, b *board.Board) (*SearchResult, e
 			return nil, err
 		}
 		res = s.pickMove(root2, round)
+		res.PassBonusApplied = true
 	}
 
 	return res, nil
@@ -177,6 +183,7 @@ func (s *Searcher) expand(ctx context.Context, node *Node, addNoise bool) (float
 	if err != nil {
 		return 0, err
 	}
+	node.rawPassPolicy = eval.Policy[PassAction]
 
 	// 模型 policy 先经过合法手 mask（board.Mask 为 361 维，不含 pass）。
 	mask := b.Mask()
@@ -230,6 +237,7 @@ func (s *Searcher) expand(ctx context.Context, node *Node, addNoise bool) (float
 	for _, a := range legal {
 		node.children[a] = newChildNode(node, a, priors[a])
 	}
+	node.passPrior = priors[PassAction]
 
 	return eval.Value, nil
 }
@@ -272,7 +280,19 @@ func (s *Searcher) pickMove(root *Node, round int) *SearchResult {
 		}
 	}
 
-	return &SearchResult{Action: chosen, VisitProbs: visitProbs, RootValue: rootValue}
+	var passVisits int32
+	if pass, ok := root.children[PassAction]; ok {
+		passVisits = pass.visits
+	}
+	return &SearchResult{
+		Action:        chosen,
+		VisitProbs:    visitProbs,
+		RootValue:     rootValue,
+		RawPassPolicy: root.rawPassPolicy,
+		PassPrior:     root.passPrior,
+		PassVisits:    passVisits,
+		TotalVisits:   total,
+	}
 }
 
 // topMovesAllEye 检查访问次数最高的前 topN 个非 pass 走法是否全是己方眼，

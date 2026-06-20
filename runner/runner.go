@@ -179,8 +179,24 @@ func (r *Runner) Run(ctx context.Context) (Stats, error) {
 
 		case selfplay.StatusMaxMoves:
 			stats.MaxMoves++
-			r.emitResult(item.index, result)
-			r.logFailure(item.index, result)
+			if result.Game == nil {
+				stats.SaveFailed++
+				r.emit(GameEvent{Game: item.index, Status: "save_failed", Moves: result.Moves})
+				r.logf("runner: game=%d reached max moves with nil game", item.index)
+				continue
+			}
+			r.emit(GameEvent{Game: item.index, Status: "saving", Moves: result.Moves})
+			if err := r.saver.SaveGame(ctx, result.Game); err != nil {
+				stats.SaveFailed++
+				r.emit(GameEvent{
+					Game: item.index, Status: "save_failed", Moves: result.Moves, Err: err,
+				})
+				r.logf("runner: game=%d max-moves save failed: %v", item.index, err)
+				continue
+			}
+			stats.Saved++
+			stats.Samples += len(result.Game.Samples)
+			r.emit(GameEvent{Game: item.index, Status: "completed", Moves: result.Moves})
 		case selfplay.StatusSearchFailed:
 			stats.SearchFailed++
 			r.emitResult(item.index, result)

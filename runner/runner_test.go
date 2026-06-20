@@ -87,6 +87,48 @@ func (blockingSearcher) Search(ctx context.Context, _ *board.Board) (*mcts.Searc
 	return nil, ctx.Err()
 }
 
+type nonFinishingSearcher struct {
+	calls int
+}
+
+func (s *nonFinishingSearcher) Search(_ context.Context, b *board.Board) (*mcts.SearchResult, error) {
+	s.calls++
+	action := mcts.PassAction
+	if s.calls%2 == 0 {
+		for point, legal := range b.Mask() {
+			if legal == 1 {
+				action = point
+				break
+			}
+		}
+	}
+	var policy [mcts.PolicySize]float32
+	policy[action] = 1
+	return &mcts.SearchResult{Action: action, VisitProbs: policy}, nil
+}
+
+func TestRunnerSavesGameAtMaxMoves(t *testing.T) {
+	saver := &countingSaver{}
+	r, err := New(&nonFinishingSearcher{}, saver, Config{
+		Games: 1, Concurrency: 1, MaxMoves: 3,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.SetLogger(log.New(io.Discard, "", 0))
+
+	stats, err := r.Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.MaxMoves != 1 || stats.Saved != 1 || stats.Samples != 3 {
+		t.Fatalf("unexpected max-moves stats: %+v", stats)
+	}
+	if saver.calls != 1 {
+		t.Fatalf("save calls=%d, want 1", saver.calls)
+	}
+}
+
 func TestRunnerStopsOnCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	r, err := New(blockingSearcher{}, &countingSaver{}, Config{Games: 10, Concurrency: 2})

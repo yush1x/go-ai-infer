@@ -23,6 +23,9 @@ type Node struct {
 	children map[int]*Node // action -> 子节点
 	visits   int32         // N
 	valueSum float32       // W，从该节点行动方视角累积
+
+	rawPassPolicy float32 // 模型原始 pass policy，仅用于调试输出
+	passPrior     float32 // mask、噪声、floor、归一化后的 pass prior
 }
 
 func newRootNode(b *board.Board) *Node {

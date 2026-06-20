@@ -155,12 +155,13 @@ func PlayWithConfig(ctx context.Context, searcher Searcher, config PlayConfig) R
 		}
 	}
 
-	return failure(
-		StatusMaxMoves,
-		config.MaxMoves,
-		lastAction,
-		fmt.Errorf("selfplay: game did not finish within %d moves", config.MaxMoves),
-	)
+	return Result{
+		Status:     StatusMaxMoves,
+		Game:       finishGame(samples, actions, b.FinalResult()),
+		Moves:      config.MaxMoves,
+		LastAction: lastAction,
+		Err:        fmt.Errorf("selfplay: game reached move limit %d", config.MaxMoves),
+	}
 }
 
 func applyAction(b *board.Board, action int) bool {

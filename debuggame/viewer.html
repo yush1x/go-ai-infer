@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Go AI Debug Game</title>
+  <style>
+    :root { color-scheme: dark; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    body { margin: 0; background: #111827; color: #e5e7eb; }
+    main { max-width: 1250px; margin: auto; padding: 20px; }
+    h1 { margin: 0 0 14px; font-size: 22px; }
+    .loader { margin-bottom: 14px; padding: 14px; background: #1f2937; border: 1px solid #374151; border-radius: 10px; }
+    .layout { display: none; grid-template-columns: minmax(480px, 720px) 1fr; gap: 20px; }
+    .layout.ready { display: grid; }
+    .panel { background: #1f2937; border: 1px solid #374151; border-radius: 10px; padding: 14px; }
+    canvas { width: 100%; aspect-ratio: 1; background: #d5a653; border-radius: 6px; display: block; }
+    .controls { display: flex; gap: 8px; align-items: center; margin-top: 12px; }
+    button { padding: 7px 12px; color: #e5e7eb; background: #374151; border: 0; border-radius: 5px; cursor: pointer; }
+    input[type=range] { flex: 1; }
+    .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .stat { background: #111827; padding: 9px; border-radius: 6px; }
+    .label { color: #9ca3af; font-size: 12px; }
+    .value { margin-top: 4px; font-size: 15px; word-break: break-all; }
+    table { width: 100%; border-collapse: collapse; margin-top: 14px; }
+    th, td { padding: 7px; border-bottom: 1px solid #374151; text-align: right; }
+    th:first-child, td:first-child { text-align: left; }
+    .config { margin-top: 14px; color: #9ca3af; white-space: pre-wrap; font-size: 12px; }
+    @media (max-width: 900px) { .layout.ready { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Go AI 单局调试</h1>
+  <div class="loader">
+    <label>选择调试 JSON：<input id="file" type="file" accept=".json,application/json"></label>
+    <span id="loadError"></span>
+  </div>
+  <div class="layout" id="layout">
+    <section class="panel">
+      <canvas id="board" width="760" height="760"></canvas>
+      <div class="controls">
+        <button id="prev">上一步</button>
+        <button id="play">播放</button>
+        <button id="next">下一步</button>
+        <input id="slider" type="range" min="0" value="0">
+      </div>
+    </section>
+    <section class="panel">
+      <div class="stats">
+        <div class="stat"><div class="label">手数</div><div class="value" id="move"></div></div>
+        <div class="stat"><div class="label">动作</div><div class="value" id="action"></div></div>
+        <div class="stat"><div class="label">行动方</div><div class="value" id="player"></div></div>
+        <div class="stat"><div class="label">Root Value</div><div class="value" id="rootValue"></div></div>
+        <div class="stat"><div class="label">原始 Pass Policy</div><div class="value" id="rawPass"></div></div>
+        <div class="stat"><div class="label">最终 Pass Prior</div><div class="value" id="passPrior"></div></div>
+        <div class="stat"><div class="label">Pass Visits</div><div class="value" id="passVisits"></div></div>
+        <div class="stat"><div class="label">Pass Bonus 第二轮</div><div class="value" id="passBonus"></div></div>
+      </div>
+      <table>
+        <thead><tr><th>Top 动作</th><th>Visit 概率</th></tr></thead>
+        <tbody id="topActions"></tbody>
+      </table>
+      <div class="config" id="summary"></div>
+    </section>
+  </div>
+</main>
+<script>
+let trace = null;
+let index = 0;
+let timer = null;
+const canvas = document.getElementById("board");
+const ctx = canvas.getContext("2d");
+const slider = document.getElementById("slider");
+const size = 19;
+
+document.getElementById("file").onchange = async event => {
+  const file = event.target.files[0];
+  if (!file) return;
+  try {
+    trace = JSON.parse(await file.text());
+    if (!Array.isArray(trace.moves) || trace.moves.length === 0) throw new Error("JSON 中没有棋局步骤");
+    index = 0;
+    slider.max = trace.moves.length - 1;
+    document.getElementById("layout").classList.add("ready");
+    document.getElementById("loadError").textContent = "";
+    document.getElementById("summary").textContent =
+      `status=${trace.status}\nfinal black=${trace.final_black} white=${trace.final_white} neutral=${trace.final_neutral}\n` +
+      JSON.stringify(trace.config, null, 2);
+    render();
+  } catch (error) {
+    document.getElementById("loadError").textContent = ` 加载失败：${error.message}`;
+  }
+};
+
+function draw(frame) {
+  const w = canvas.width, margin = 34, gap = (w - margin * 2) / (size - 1);
+  ctx.clearRect(0, 0, w, w);
+  ctx.fillStyle = "#d5a653"; ctx.fillRect(0, 0, w, w);
+  ctx.strokeStyle = "#37240d"; ctx.lineWidth = 1.5;
+  for (let i = 0; i < size; i++) {
+    const p = margin + i * gap;
+    ctx.beginPath(); ctx.moveTo(margin, p); ctx.lineTo(w - margin, p); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(p, margin); ctx.lineTo(p, w - margin); ctx.stroke();
+  }
+  for (const x of [3, 9, 15]) for (const y of [3, 9, 15]) {
+    ctx.beginPath(); ctx.arc(margin + y * gap, margin + x * gap, 4, 0, Math.PI * 2);
+    ctx.fillStyle = "#37240d"; ctx.fill();
+  }
+  frame.board.forEach((stone, p) => {
+    if (!stone) return;
+    const x = Math.floor(p / size), y = p % size;
+    ctx.beginPath(); ctx.arc(margin + y * gap, margin + x * gap, gap * 0.45, 0, Math.PI * 2);
+    ctx.fillStyle = stone === 1 ? "#111" : "#f3f4f6"; ctx.fill();
+    ctx.strokeStyle = stone === 1 ? "#000" : "#9ca3af"; ctx.stroke();
+  });
+  if (!frame.pass && frame.action >= 0) {
+    const x = Math.floor(frame.action / size), y = frame.action % size;
+    ctx.beginPath(); ctx.arc(margin + y * gap, margin + x * gap, gap * 0.13, 0, Math.PI * 2);
+    ctx.fillStyle = "#ef4444"; ctx.fill();
+  }
+}
+
+function number(value) { return Number(value || 0).toFixed(6); }
+function render() {
+  if (!trace) return;
+  const frame = trace.moves[index];
+  slider.value = index;
+  draw(frame);
+  document.getElementById("move").textContent = `${frame.move} / ${trace.moves.length - 1}`;
+  document.getElementById("action").textContent = frame.coordinate;
+  document.getElementById("player").textContent = frame.player;
+  document.getElementById("rootValue").textContent = number(frame.root_value);
+  document.getElementById("rawPass").textContent = number(frame.raw_pass_policy);
+  document.getElementById("passPrior").textContent = number(frame.pass_prior);
+  document.getElementById("passVisits").textContent = `${frame.pass_visits || 0} / ${frame.total_visits || 0}`;
+  document.getElementById("passBonus").textContent = frame.pass_bonus_applied ? "是" : "否";
+  document.getElementById("topActions").innerHTML = (frame.top_actions || []).map(
+    item => `<tr><td>${item.coordinate}</td><td>${number(item.probability)}</td></tr>`
+  ).join("");
+}
+
+document.getElementById("prev").onclick = () => { index = Math.max(0, index - 1); render(); };
+document.getElementById("next").onclick = () => { index = Math.min(trace.moves.length - 1, index + 1); render(); };
+slider.oninput = () => { index = Number(slider.value); render(); };
+document.getElementById("play").onclick = event => {
+  if (timer) {
+    clearInterval(timer); timer = null; event.target.textContent = "播放"; return;
+  }
+  event.target.textContent = "暂停";
+  timer = setInterval(() => {
+    if (!trace || index >= trace.moves.length - 1) {
+      clearInterval(timer); timer = null; event.target.textContent = "播放"; return;
+    }
+    index++; render();
+  }, 350);
+};
+</script>
+</body>
+</html>
