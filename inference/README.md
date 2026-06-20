@@ -6,7 +6,9 @@
 
 ## 创建推理器
 
-整个程序应只创建一个共享的 `Batcher`，所有 MCTS 和自博弈棋局共同使用它。
+同一个模型接口应只创建一个共享的 `Batcher`，所有使用该模型的 MCTS 和棋局共同使用它。
+比较两个模型时，`/predict/a` 和 `/predict/b` 必须分别创建独立的 `Batcher`，
+避免两个模型的局面进入同一个推理 batch。
 
 ```go
 package main
@@ -222,4 +224,3 @@ defer batcher.Close()
 ```
 
 关闭后不再接受新请求，正在等待的调用会收到 `inference.ErrClosed`。
-

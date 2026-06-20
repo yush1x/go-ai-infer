@@ -74,6 +74,22 @@ go run .
 - 管理配置、日志、错误、取消和优雅退出
 - 汇总生成棋局和训练样本的统计信息
 
+### 6. Match
+
+负责让两个不同模型进行批量对弈：
+
+- 分别调用 `/predict/a` 和 `/predict/b`
+- 为两个模型维护独立的推理 Batcher
+- 并发运行多盘棋并自动交换黑白
+- 汇总双方胜局、胜率、异常局和达到步数上限的棋局
+- 把全部棋局写入一个 JSON，并通过 HTML 页面回放
+
+配置和运行入口位于 `matchgame/main.go`：
+
+```bash
+go run ./matchgame
+```
+
 ## 模块依赖
 
 ```text
@@ -108,3 +124,4 @@ Runner 启动多个 SelfPlay
 - [项目模型与训练流程](docs/overview.md)
 - [Python 推理服务二进制协议](docs/inference_protocol.md)
 - [SelfPlay 训练数据提交协议](docs/selfplay_storage_protocol.md)
+- [双模型对弈](match/README.md)

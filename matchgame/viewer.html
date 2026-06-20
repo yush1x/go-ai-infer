@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Go AI Match Viewer</title>
+  <style>
+    :root { color-scheme: dark; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    body { margin: 0; background: #111827; color: #e5e7eb; }
+    main { max-width: 1380px; margin: auto; padding: 20px; }
+    h1 { margin: 0 0 14px; font-size: 22px; }
+    .loader, .panel { background: #1f2937; border: 1px solid #374151; border-radius: 10px; padding: 14px; }
+    .loader { margin-bottom: 14px; }
+    .summary { display: none; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 14px; }
+    .summary.ready { display: grid; }
+    .layout { display: none; grid-template-columns: 250px minmax(480px, 720px) 1fr; gap: 16px; }
+    .layout.ready { display: grid; }
+    .stat { background: #111827; padding: 9px; border-radius: 6px; }
+    .label { color: #9ca3af; font-size: 12px; }
+    .value { margin-top: 4px; font-size: 15px; word-break: break-all; }
+    .games { max-height: 760px; overflow: auto; }
+    .game { width: 100%; text-align: left; margin-bottom: 7px; padding: 9px; border: 1px solid #374151; border-radius: 6px; color: #e5e7eb; background: #111827; cursor: pointer; }
+    .game.active { border-color: #60a5fa; background: #172554; }
+    canvas { width: 100%; aspect-ratio: 1; background: #d5a653; border-radius: 6px; display: block; }
+    .controls { display: flex; gap: 8px; align-items: center; margin-top: 12px; }
+    button { padding: 7px 12px; color: #e5e7eb; background: #374151; border: 0; border-radius: 5px; cursor: pointer; }
+    input[type=range] { flex: 1; }
+    .details { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .config { margin-top: 14px; color: #9ca3af; white-space: pre-wrap; font-size: 12px; }
+    @media (max-width: 1050px) {
+      .layout.ready { grid-template-columns: 1fr; }
+      .games { max-height: 280px; }
+      .summary.ready { grid-template-columns: 1fr 1fr; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Go AI 模型对弈</h1>
+  <div class="loader">
+    <label>选择比赛 JSON：<input id="file" type="file" accept=".json,application/json"></label>
+    <span id="loadError"></span>
+  </div>
+  <section class="summary" id="summary">
+    <div class="stat"><div class="label" id="modelALabel">模型 A</div><div class="value" id="modelA"></div></div>
+    <div class="stat"><div class="label" id="modelBLabel">模型 B</div><div class="value" id="modelB"></div></div>
+    <div class="stat"><div class="label">有效对局</div><div class="value" id="validGames"></div></div>
+    <div class="stat"><div class="label">异常对局</div><div class="value" id="failedGames"></div></div>
+  </section>
+  <div class="layout" id="layout">
+    <aside class="panel games" id="games"></aside>
+    <section class="panel">
+      <canvas id="board" width="760" height="760"></canvas>
+      <div class="controls">
+        <button id="prev">上一步</button>
+        <button id="play">播放</button>
+        <button id="next">下一步</button>
+        <input id="slider" type="range" min="0" value="0">
+      </div>
+    </section>
+    <section class="panel">
+      <div class="details">
+        <div class="stat"><div class="label">棋局</div><div class="value" id="gameID"></div></div>
+        <div class="stat"><div class="label">状态</div><div class="value" id="status"></div></div>
+        <div class="stat"><div class="label">黑方</div><div class="value" id="black"></div></div>
+        <div class="stat"><div class="label">白方</div><div class="value" id="white"></div></div>
+        <div class="stat"><div class="label">胜者</div><div class="value" id="winner"></div></div>
+        <div class="stat"><div class="label">黑方目差</div><div class="value" id="lead"></div></div>
+        <div class="stat"><div class="label">当前手数</div><div class="value" id="move"></div></div>
+        <div class="stat"><div class="label">当前动作</div><div class="value" id="action"></div></div>
+        <div class="stat"><div class="label">落子模型</div><div class="value" id="moveModel"></div></div>
+        <div class="stat"><div class="label">落子颜色</div><div class="value" id="player"></div></div>
+      </div>
+      <div class="config" id="config"></div>
+    </section>
+  </div>
+</main>
+<script>
+let report = null, gameIndex = 0, frameIndex = 0, timer = null;
+const canvas = document.getElementById("board");
+const ctx = canvas.getContext("2d");
+const slider = document.getElementById("slider");
+
+document.getElementById("file").onchange = async event => {
+  const file = event.target.files[0];
+  if (!file) return;
+  try {
+    report = JSON.parse(await file.text());
+    if (!Array.isArray(report.games) || report.games.length === 0) throw new Error("JSON 中没有棋局");
+    gameIndex = 0; frameIndex = 0;
+    document.getElementById("summary").classList.add("ready");
+    document.getElementById("layout").classList.add("ready");
+    document.getElementById("loadError").textContent = "";
+    renderSummary(); renderGameList(); selectGame(0);
+  } catch (error) {
+    document.getElementById("loadError").textContent = ` 加载失败：${error.message}`;
+  }
+};
+
+function percent(value) { return `${(Number(value || 0) * 100).toFixed(2)}%`; }
+function renderSummary() {
+  const [a, b] = report.models;
+  document.getElementById("modelALabel").textContent = a;
+  document.getElementById("modelBLabel").textContent = b;
+  document.getElementById("modelA").textContent = `${report.summary.model_a_wins} 胜 / ${percent(report.summary.model_a_win_rate)}`;
+  document.getElementById("modelB").textContent = `${report.summary.model_b_wins} 胜 / ${percent(report.summary.model_b_win_rate)}`;
+  document.getElementById("validGames").textContent = report.summary.valid_games;
+  document.getElementById("failedGames").textContent = report.summary.failed;
+}
+
+function renderGameList() {
+  document.getElementById("games").innerHTML = report.games.map((game, i) =>
+    `<button class="game ${i === gameIndex ? "active" : ""}" data-index="${i}">
+      #${String(game.id).padStart(3, "0")} ${game.black_model} 黑<br>
+      ${game.white_model} 白 · ${game.winner_model ? `${game.winner_model} 胜` : game.status}
+    </button>`
+  ).join("");
+  document.querySelectorAll(".game").forEach(button => {
+    button.onclick = () => selectGame(Number(button.dataset.index));
+  });
+}
+
+function selectGame(index) {
+  gameIndex = index; frameIndex = 0;
+  stopPlayback();
+  const game = report.games[gameIndex];
+  slider.max = Math.max(0, (game.frames || []).length - 1);
+  renderGameList(); render();
+}
+
+function draw(frame) {
+  const size = report.board_size || 19;
+  const w = canvas.width, margin = 34, gap = (w - margin * 2) / (size - 1);
+  ctx.clearRect(0, 0, w, w);
+  ctx.fillStyle = "#d5a653"; ctx.fillRect(0, 0, w, w);
+  ctx.strokeStyle = "#37240d"; ctx.lineWidth = 1.5;
+  for (let i = 0; i < size; i++) {
+    const p = margin + i * gap;
+    ctx.beginPath(); ctx.moveTo(margin, p); ctx.lineTo(w - margin, p); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(p, margin); ctx.lineTo(p, w - margin); ctx.stroke();
+  }
+  for (const x of [3, 9, 15]) for (const y of [3, 9, 15]) {
+    ctx.beginPath(); ctx.arc(margin + y * gap, margin + x * gap, 4, 0, Math.PI * 2);
+    ctx.fillStyle = "#37240d"; ctx.fill();
+  }
+  (frame.board || []).forEach((stone, p) => {
+    if (!stone) return;
+    const x = Math.floor(p / size), y = p % size;
+    ctx.beginPath(); ctx.arc(margin + y * gap, margin + x * gap, gap * 0.45, 0, Math.PI * 2);
+    ctx.fillStyle = stone === 1 ? "#111" : "#f3f4f6"; ctx.fill();
+    ctx.strokeStyle = stone === 1 ? "#000" : "#9ca3af"; ctx.stroke();
+  });
+  if (!frame.pass && frame.action >= 0) {
+    const x = Math.floor(frame.action / size), y = frame.action % size;
+    ctx.beginPath(); ctx.arc(margin + y * gap, margin + x * gap, gap * 0.13, 0, Math.PI * 2);
+    ctx.fillStyle = "#ef4444"; ctx.fill();
+  }
+}
+
+function render() {
+  const game = report.games[gameIndex];
+  const frames = game.frames || [];
+  const frame = frames[frameIndex] || { board: [], move: 0, coordinate: "-", model: "-", player: "-" };
+  slider.value = frameIndex;
+  draw(frame);
+  document.getElementById("gameID").textContent = `#${game.id}`;
+  document.getElementById("status").textContent = game.status;
+  document.getElementById("black").textContent = game.black_model;
+  document.getElementById("white").textContent = game.white_model;
+  document.getElementById("winner").textContent = game.winner_model || "-";
+  document.getElementById("lead").textContent = Number(game.black_lead || 0).toFixed(1);
+  document.getElementById("move").textContent = `${frame.move} / ${game.total_moves}`;
+  document.getElementById("action").textContent = frame.coordinate;
+  document.getElementById("moveModel").textContent = frame.model;
+  document.getElementById("player").textContent = frame.player;
+  document.getElementById("config").textContent = JSON.stringify(report.config, null, 2);
+}
+
+function stopPlayback() {
+  if (timer) clearInterval(timer);
+  timer = null;
+  document.getElementById("play").textContent = "播放";
+}
+document.getElementById("prev").onclick = () => { frameIndex = Math.max(0, frameIndex - 1); render(); };
+document.getElementById("next").onclick = () => {
+  const frames = report.games[gameIndex].frames || [];
+  frameIndex = Math.min(Math.max(0, frames.length - 1), frameIndex + 1); render();
+};
+slider.oninput = () => { frameIndex = Number(slider.value); render(); };
+document.getElementById("play").onclick = event => {
+  if (timer) { stopPlayback(); return; }
+  event.target.textContent = "暂停";
+  timer = setInterval(() => {
+    const frames = report.games[gameIndex].frames || [];
+    if (frameIndex >= frames.length - 1) { stopPlayback(); return; }
+    frameIndex++; render();
+  }, 350);
+};
+</script>
+</body>
+</html>

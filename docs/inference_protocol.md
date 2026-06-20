@@ -1,11 +1,39 @@
 # Python 推理服务协议
 
-Go 端通过 `POST /predict` 批量调用 Python 模型。请求和响应均为 little-endian、连续排列的 `float32` 二进制数据。
+Go 端通过 `POST /predict`、`POST /predict/a` 或 `POST /predict/b` 批量调用 Python 模型。三个接口的请求和响应协议完全一致，仅 URL 对应的模型权重不同。请求和响应均为 little-endian、连续排列的 `float32` 二进制数据。
+
+## 模型接口
+
+Python 服务启动时会加载两个模型：
+
+```text
+POST /predict    使用默认模型
+POST /predict/a  使用服务端配置的模型 a
+POST /predict/b  使用服务端配置的模型 b
+```
+
+模型权重路径在 `src/server.py` 顶部的 `MODEL_WEIGHTS` 中配置，默认模型由同一位置的 `DEFAULT_MODEL` 配置。
 
 ## 请求
 
 ```http
 POST /predict
+Content-Type: application/octet-stream
+X-Batch-Size: <B>
+```
+
+调用指定模型时只需要把 URL 改为：
+
+```http
+POST /predict/a
+Content-Type: application/octet-stream
+X-Batch-Size: <B>
+```
+
+或：
+
+```http
+POST /predict/b
 Content-Type: application/octet-stream
 X-Batch-Size: <B>
 ```
@@ -128,11 +156,25 @@ channel 1 : 白
 
 ## 错误处理
 
+模型在服务启动时加载。若权重文件不存在或模型加载失败，服务启动失败；若模型已配置但当前进程尚未加载完成，请求返回 `503`。
+
 以下情况返回 `400`：
 
 ```text
 X-Batch-Size 缺失、无效或小于等于 0
 Body 长度不等于 B * 9 * 19 * 19 * 4
+```
+
+以下情况返回 `404`：
+
+```text
+请求了未配置的模型接口，例如 /predict/c
+```
+
+以下情况返回 `503`：
+
+```text
+模型已配置但尚未完成加载
 ```
 
 Go 端还应检查：
@@ -141,3 +183,9 @@ Go 端还应检查：
 HTTP 状态码为 200
 响应长度等于 B * 1086 * 4
 ```
+
+## 并发与设备
+
+服务允许并发调用 `/predict`、`/predict/a` 和 `/predict/b`。每个请求会路由到对应的常驻模型实例执行推理。
+
+两个模型使用 `GoInference` 的设备选择逻辑加载：优先 CUDA，其次 MPS，最后 CPU。当前服务不做多 GPU 分配；如果环境只有一张可用 GPU，两个模型会加载到同一张 GPU。
