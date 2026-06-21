@@ -15,11 +15,14 @@ import (
 )
 
 const (
-	totalGames      = 16  // 本次运行需要生成的总棋局数
-	gameConcurrency = 10  // 同时进行自博弈的棋局数
+	totalGames      = 200 // 本次运行需要生成的总棋局数
+	gameConcurrency = 100 // 同时进行自博弈的棋局数
 	maxMoves        = 450 // 单局最大步数；达到后按当前局面强制结算并保存
+	// valueMCTSWeight 控制 value 标签中 MCTS 根节点估值的占比。
+	// 最终标签 = (1-weight)*终局胜负 + weight*MCTS RootValue，范围必须为 [0,1]。
+	valueMCTSWeight = float32(0.5)
 
-	numSimulations = 50            // 每一步 MCTS 搜索执行的模拟次数
+	numSimulations = 100           // 每一步 MCTS 搜索执行的模拟次数
 	cPuct          = float32(1.5)  // MCTS 在利用和探索之间的平衡系数
 	dirichletAlpha = float32(0.03) // 自博弈根节点 Dirichlet 噪声分布参数
 	dirichletEps   = float32(0.15) // 自博弈根节点混入随机噪声的比例
@@ -28,9 +31,9 @@ const (
 	passPolicyFloor = float32(0.00)
 	// passBonus 只在热门非 pass 走法均为己方眼时，加到 pass 的 PUCT 分数上。
 	// 0 表示关闭；必须 >= 0，没有硬上限。建议从 0.05~0.5 开始，超过 1 通常很强。
-	passBonus = float32(0.8)
+	passBonus = float32(0.5)
 
-	inferenceBatchSize = 8                    // Python 单次批量推理的最大局面数
+	inferenceBatchSize = 64                   // Python 单次批量推理的最大局面数
 	inferenceMaxWait   = 5 * time.Millisecond // 推理 batch 未满时的最大等待时间
 	inferenceQueueSize = 128                  // 等待批量推理的最大请求数量
 
@@ -90,9 +93,10 @@ func run() error {
 	}
 
 	runConfig := runner.Config{
-		Games:       totalGames,
-		Concurrency: gameConcurrency,
-		MaxMoves:    maxMoves,
+		Games:           totalGames,
+		Concurrency:     gameConcurrency,
+		MaxMoves:        maxMoves,
+		ValueMCTSWeight: valueMCTSWeight,
 	}
 	status := newDashboard(os.Stderr, totalGames, inferenceBatchSize)
 	batcher.SetObserver(status.OnBatchEvent)
@@ -106,13 +110,14 @@ func run() error {
 	fmt.Fprintf(
 		os.Stderr,
 		"Started   games=%d concurrency=%d max_moves=%d simulations=%d batch=%d max_wait=%s "+
-			"pass_floor=%.3f pass_bonus=%.3f\n",
+			"value_mcts_weight=%.3f pass_floor=%.3f pass_bonus=%.3f\n",
 		totalGames,
 		gameConcurrency,
 		maxMoves,
 		numSimulations,
 		inferenceBatchSize,
 		inferenceMaxWait,
+		valueMCTSWeight,
 		passPolicyFloor,
 		passBonus,
 	)

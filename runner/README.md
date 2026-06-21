@@ -8,6 +8,7 @@
 cfg := runner.DefaultConfig()
 cfg.Games = 100
 cfg.Concurrency = 8
+cfg.ValueMCTSWeight = 0.2
 
 storage, err := runner.NewHTTPStorageClient(
     runner.DefaultStorageURL,
@@ -26,6 +27,8 @@ stats, err := r.Run(ctx)
 ```
 
 其中 `searcher` 通常是启用 `SelfPlay=true` 的 `*mcts.Searcher`，其下层共享同一个 `inference.Batcher`。
+
+`ValueMCTSWeight` 控制训练 value 标签中 MCTS 根节点估值的占比，范围为 `[0,1]`；默认 `0` 保持纯终局标签。
 
 ## 行为
 

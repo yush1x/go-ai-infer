@@ -19,12 +19,20 @@ result := selfplay.Play(ctx, searcher)
 ```text
 Features  float32 [9,19,19]  落子前的局面
 Policy    float32 [362]       MCTS 根节点访问次数分布
-Value     float32             当前行动方视角的终局胜负
+Value     float32             当前行动方视角的连续价值标签
 Score     float32             当前行动方视角的终局目差
 Ownership int8 [19,19]        0=黑，1=白，-1=中立/未知
 ```
 
-`Features` 和 `Policy` 在每次落子前记录。棋局正常结束后，再根据最终结果为所有步骤回填 `Value`、`Score` 和 `Ownership`。
+`Features`、`Policy` 和 MCTS 根节点的 `RootValue` 在每次落子前记录。棋局正常结束后，再回填训练标签。
+
+`Value` 可通过 `PlayConfig.ValueMCTSWeight` 融合终局胜负和当步 MCTS 估值：
+
+```text
+Value = (1 - weight) * TerminalValue + weight * RootValue
+```
+
+`weight` 范围为 `[0,1]`，默认 `0` 表示只使用终局胜负。`Score` 和 `Ownership` 始终只使用终局结果。
 
 ## 终局与失败
 

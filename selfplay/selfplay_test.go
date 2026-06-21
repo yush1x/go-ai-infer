@@ -10,9 +10,10 @@ import (
 )
 
 type scriptedSearcher struct {
-	actions []int
-	calls   int
-	err     error
+	actions    []int
+	rootValues []float32
+	calls      int
+	err        error
 }
 
 func (s *scriptedSearcher) Search(_ context.Context, _ *board.Board) (*mcts.SearchResult, error) {
@@ -25,7 +26,11 @@ func (s *scriptedSearcher) Search(_ context.Context, _ *board.Board) (*mcts.Sear
 	if action >= 0 && action < len(policy) {
 		policy[action] = 1
 	}
-	return &mcts.SearchResult{Action: action, VisitProbs: policy}, nil
+	var rootValue float32
+	if s.calls <= len(s.rootValues) {
+		rootValue = s.rootValues[s.calls-1]
+	}
+	return &mcts.SearchResult{Action: action, VisitProbs: policy, RootValue: rootValue}, nil
 }
 
 func TestPlayReturnsTrainingSamples(t *testing.T) {
@@ -132,6 +137,45 @@ func TestPlayUsesConfiguredMaxMovesAndReportsProgress(t *testing.T) {
 	}
 	if len(moves) != 3 || moves[0] != 1 || moves[1] != 2 || moves[2] != 3 {
 		t.Fatalf("progress=%v, want [1 2 3]", moves)
+	}
+}
+
+func TestPlayBlendsTerminalAndMCTSValues(t *testing.T) {
+	searcher := &scriptedSearcher{
+		actions:    []int{mcts.PassAction, mcts.PassAction},
+		rootValues: []float32{0.5, -0.25},
+	}
+	result := PlayWithConfig(context.Background(), searcher, PlayConfig{
+		MaxMoves:        DefaultMaxMoves,
+		ValueMCTSWeight: 0.2,
+	})
+
+	if result.Status != StatusCompleted || result.Game == nil {
+		t.Fatalf("status=%s game=%v err=%v, want completed", result.Status, result.Game, result.Err)
+	}
+	if got := result.Game.Samples[0].Value; got != -0.7 {
+		t.Errorf("black value=%v, want -0.7", got)
+	}
+	if got := result.Game.Samples[1].Value; got != 0.75 {
+		t.Errorf("white value=%v, want 0.75", got)
+	}
+	if got := result.Game.Samples[0].Score; got != -Komi {
+		t.Errorf("score=%v, want %v", got, -Komi)
+	}
+	for i, sample := range result.Game.Samples {
+		if sample.Ownership != result.Game.Final.Ownership {
+			t.Errorf("sample %d ownership changed during value blending", i)
+		}
+	}
+}
+
+func TestPlayRejectsInvalidValueMCTSWeight(t *testing.T) {
+	result := PlayWithConfig(context.Background(), &scriptedSearcher{}, PlayConfig{
+		MaxMoves:        DefaultMaxMoves,
+		ValueMCTSWeight: 1.1,
+	})
+	if result.Status != StatusSearchFailed || result.Err == nil {
+		t.Fatalf("status=%s err=%v, want configuration failure", result.Status, result.Err)
 	}
 }
 

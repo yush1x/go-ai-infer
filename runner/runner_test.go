@@ -146,3 +146,14 @@ func TestRunnerStopsOnCancellation(t *testing.T) {
 		t.Errorf("saved=%d, want 0", stats.Saved)
 	}
 }
+
+func TestRunnerRejectsInvalidValueMCTSWeight(t *testing.T) {
+	_, err := New(passSearcher{}, &countingSaver{}, Config{
+		Games:           1,
+		Concurrency:     1,
+		ValueMCTSWeight: -0.1,
+	})
+	if err == nil {
+		t.Fatal("expected invalid value MCTS weight error")
+	}
+}

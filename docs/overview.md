@@ -54,14 +54,14 @@ value      : [1]，当前先手视角的终局胜负，1=赢，-1=输
 
 自博弈使用当前 CNN + MCTS 生成棋局。CNN 给 MCTS 提供 policy/value/score/ownership，MCTS 搜索后选择落子，并把搜索结果作为新训练数据。
 
-自博弈阶段联合训练 policy/value/score/ownership。
+自博弈阶段联合训练 policy/value/score/ownership。当前仅 value 可配置融合 MCTS 根节点估值；score 和 ownership 仍使用纯终局标签。
 
 自博弈样本：
 
 ```text
 input      : [9,19,19]，当前局面
 policy     : [362]，MCTS 访问次数分布，visit_count / total_visit_count
-value      : [1]，当前先手视角终局胜负，1=赢，-1=输
+value      : [1]，当前先手视角，范围 [-1,1]；由终局胜负和 MCTS RootValue 加权融合
 score      : [1]，当前先手视角终局目差，正数=赢，负数=输
 ownership  : [19,19]，终局点归属，0=黑，1=白，-1=未知；-1 不参与 ownership loss
 ```

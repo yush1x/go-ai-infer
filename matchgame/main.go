@@ -24,10 +24,10 @@ const (
 	modelBURL  = "http://127.0.0.1:8000/predict/b"
 
 	totalGames      = 20  // 建议使用偶数，保证双方执黑次数相同
-	gameConcurrency = 8   // 同时运行的棋局数
+	gameConcurrency = 20  // 同时运行的棋局数
 	maxMoves        = 450 // 达到上限后按当前盘面结算
 
-	numSimulations = 100
+	numSimulations = 200
 	cPuct          = float32(1.5)
 
 	// true 会加入根节点噪声，并在前 30 手按访问概率采样，使多盘对局不完全重复。
@@ -38,10 +38,13 @@ const (
 	passPolicyFloor        = float32(0.0)
 	passBonus              = float32(0.8)
 
-	inferenceBatchSize = 8
+	inferenceBatchSize = 16
 	inferenceMaxWait   = 5 * time.Millisecond
 	inferenceQueueSize = 128
 	inferenceTimeout   = 30 * time.Second
+
+	dashboardRefreshInterval     = 500 * time.Millisecond
+	dashboardTextSummaryInterval = 10 * time.Second
 
 	outputFile = "matchgame/results.json"
 )
@@ -78,9 +81,14 @@ func run() error {
 	searcherA := mcts.NewSearcher(batcherA, searchConfig)
 	searcherB := mcts.NewSearcher(batcherB, searchConfig)
 
+	status := newMatchDashboard(
+		os.Stderr, totalGames, modelAName, modelBName, inferenceBatchSize,
+	)
+	batcherA.SetObserver(status.OnBatchA)
+	batcherB.SetObserver(status.OnBatchB)
 	config := match.Config{
 		Games: totalGames, Concurrency: gameConcurrency, MaxMoves: maxMoves,
-		OnGameEvent: logGameEvent,
+		OnGameEvent: status.OnGameEvent,
 	}
 	runner, err := match.New(
 		match.Player{Name: modelAName, Searcher: searcherA},
@@ -96,7 +104,9 @@ func run() error {
 		"Match started: %s vs %s games=%d concurrency=%d simulations=%d max_moves=%d\n",
 		modelAName, modelBName, totalGames, gameConcurrency, numSimulations, maxMoves,
 	)
+	status.Start()
 	report, stats, runErr := runner.Run(ctx)
+	status.Stop()
 	report.Config.Simulations = numSimulations
 	report.Config.CPuct = cPuct
 	report.Config.Exploration = enableMatchExploration
@@ -130,22 +140,6 @@ func newBatcher(url string) (*inference.Batcher, error) {
 		MaxWait:   inferenceMaxWait,
 		QueueSize: inferenceQueueSize,
 	})
-}
-
-func logGameEvent(event match.GameEvent) {
-	switch event.Status {
-	case "completed", "max_moves":
-		fmt.Printf(
-			"Game #%03d finished: %s(black) vs %s(white), winner=%s, black_lead=%.1f, moves=%d, status=%s\n",
-			event.Game, event.BlackModel, event.WhiteModel, event.Winner,
-			event.BlackLead, event.Moves, event.Status,
-		)
-	case "search_failed", "illegal_action", "canceled":
-		fmt.Printf(
-			"Game #%03d failed: %s(black) vs %s(white), moves=%d, status=%s, error=%v\n",
-			event.Game, event.BlackModel, event.WhiteModel, event.Moves, event.Status, event.Err,
-		)
-	}
 }
 
 func printSummary(stats match.Stats) {

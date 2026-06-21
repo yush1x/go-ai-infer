@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"sync"
 	"time"
 
@@ -17,10 +18,11 @@ const (
 )
 
 type Config struct {
-	Games       int
-	Concurrency int
-	MaxMoves    int
-	OnGameEvent func(GameEvent)
+	Games           int
+	Concurrency     int
+	MaxMoves        int
+	ValueMCTSWeight float32
+	OnGameEvent     func(GameEvent)
 }
 
 func DefaultConfig() Config {
@@ -85,6 +87,12 @@ func New(searcher selfplay.Searcher, saver GameSaver, config Config) (*Runner, e
 	if config.MaxMoves < 0 {
 		return nil, errors.New("runner: max moves must be positive")
 	}
+	if math.IsNaN(float64(config.ValueMCTSWeight)) ||
+		math.IsInf(float64(config.ValueMCTSWeight), 0) ||
+		config.ValueMCTSWeight < 0 ||
+		config.ValueMCTSWeight > 1 {
+		return nil, errors.New("runner: value MCTS weight must be within [0,1]")
+	}
 	if config.Concurrency > config.Games {
 		config.Concurrency = config.Games
 	}
@@ -126,7 +134,8 @@ func (r *Runner) Run(ctx context.Context) (Stats, error) {
 			for index := range jobs {
 				r.emit(GameEvent{Game: index, Status: "running"})
 				result := selfplay.PlayWithConfig(ctx, r.searcher, selfplay.PlayConfig{
-					MaxMoves: r.config.MaxMoves,
+					MaxMoves:        r.config.MaxMoves,
+					ValueMCTSWeight: r.config.ValueMCTSWeight,
 					OnMove: func(move int) {
 						r.emit(GameEvent{Game: index, Status: "running", Moves: move})
 					},

@@ -62,9 +62,18 @@ Policy 是 MCTS 根节点访问次数分布：
 Value 和 Score 使用当前行动方视角：
 
 ```text
-value : 胜=1，负=-1，和=0
+value : [-1,1] 内的连续值；正数占优，负数不利
 score : 正数为领先，负数为落后
 ```
+
+当前 Value 标签可由终局胜负和该步 MCTS 根节点估值加权生成：
+
+```text
+value = (1 - value_mcts_weight) * terminal_value
+      + value_mcts_weight * mcts_root_value
+```
+
+`terminal_value` 为胜 `1`、负 `-1`、和 `0`。该融合不改变二进制存储格式。
 
 固定贴目为 `7.5`。先计算：
 
@@ -124,4 +133,3 @@ def decode_game(body: bytes, n: int):
 状态码：`400` 表示请求非法，`500` 表示保存失败。
 
 Python 端至少校验 `X-Sample-Count`、Body 长度，以及浮点数据中是否存在 NaN 或无穷值。
-

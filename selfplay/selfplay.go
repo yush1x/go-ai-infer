@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 
 	"go-ai-infer/board"
 	"go-ai-infer/inference"
@@ -25,8 +26,9 @@ type Searcher interface {
 }
 
 type PlayConfig struct {
-	MaxMoves int
-	OnMove   func(move int)
+	MaxMoves        int
+	ValueMCTSWeight float32
+	OnMove          func(move int)
 }
 
 func DefaultPlayConfig() PlayConfig {
@@ -43,8 +45,8 @@ const (
 	StatusCanceled      Status = "canceled"
 )
 
-// Sample 是一个训练样本。Features 和 Policy 在该手落子前记录，
-// Value、Score 和 Ownership 在整盘正常结束后统一回填。
+// Sample 是一个训练样本。Features、Policy 和 MCTS value 在该手落子前记录；
+// Value 在终局后融合，Score 和 Ownership 使用纯终局结果。
 type Sample struct {
 	Features  inference.Features
 	Policy    [inference.PolicySize]float32
@@ -54,6 +56,8 @@ type Sample struct {
 
 	Player int
 	Action int
+
+	mctsValue float32
 }
 
 // Game 是一盘正常结束、可以进入训练的数据。
@@ -92,6 +96,12 @@ func PlayWithConfig(ctx context.Context, searcher Searcher, config PlayConfig) R
 	if config.MaxMoves <= 0 {
 		return failure(StatusSearchFailed, 0, -1, errors.New("selfplay: max moves must be positive"))
 	}
+	if math.IsNaN(float64(config.ValueMCTSWeight)) ||
+		math.IsInf(float64(config.ValueMCTSWeight), 0) ||
+		config.ValueMCTSWeight < 0 ||
+		config.ValueMCTSWeight > 1 {
+		return failure(StatusSearchFailed, 0, -1, errors.New("selfplay: value MCTS weight must be within [0,1]"))
+	}
 
 	b := board.New()
 	samples := make([]Sample, 0, config.MaxMoves)
@@ -122,10 +132,11 @@ func PlayWithConfig(ctx context.Context, searcher Searcher, config PlayConfig) R
 
 		action := searchResult.Action
 		sample := Sample{
-			Features: b.Tensor(),
-			Policy:   searchResult.VisitProbs,
-			Player:   player,
-			Action:   action,
+			Features:  b.Tensor(),
+			Policy:    searchResult.VisitProbs,
+			Player:    player,
+			Action:    action,
+			mctsValue: searchResult.RootValue,
 		}
 
 		if !applyAction(b, action) {
@@ -145,7 +156,7 @@ func PlayWithConfig(ctx context.Context, searcher Searcher, config PlayConfig) R
 		}
 
 		if b.IsFinish() == 1 {
-			game := finishGame(samples, actions, b.FinalResult())
+			game := finishGame(samples, actions, b.FinalResult(), config.ValueMCTSWeight)
 			return Result{
 				Status:     StatusCompleted,
 				Game:       game,
@@ -157,7 +168,7 @@ func PlayWithConfig(ctx context.Context, searcher Searcher, config PlayConfig) R
 
 	return Result{
 		Status:     StatusMaxMoves,
-		Game:       finishGame(samples, actions, b.FinalResult()),
+		Game:       finishGame(samples, actions, b.FinalResult(), config.ValueMCTSWeight),
 		Moves:      config.MaxMoves,
 		LastAction: lastAction,
 		Err:        fmt.Errorf("selfplay: game reached move limit %d", config.MaxMoves),
@@ -174,7 +185,7 @@ func applyAction(b *board.Board, action int) bool {
 	return b.Move(action/board.Size, action%board.Size) == 0
 }
 
-func finishGame(samples []Sample, actions []int, final board.FinalResult) *Game {
+func finishGame(samples []Sample, actions []int, final board.FinalResult, valueMCTSWeight float32) *Game {
 	blackLead := float32(final.Black-final.White) - Komi
 	winner := board.Black
 	if blackLead < 0 {
@@ -187,14 +198,16 @@ func finishGame(samples []Sample, actions []int, final board.FinalResult) *Game 
 			score = -score
 		}
 		samples[i].Score = score
+		var terminalValue float32
 		switch {
 		case score > 0:
-			samples[i].Value = 1
+			terminalValue = 1
 		case score < 0:
-			samples[i].Value = -1
+			terminalValue = -1
 		default:
-			samples[i].Value = 0
+			terminalValue = 0
 		}
+		samples[i].Value = blendValue(terminalValue, samples[i].mctsValue, valueMCTSWeight)
 		samples[i].Ownership = final.Ownership
 	}
 
@@ -206,6 +219,21 @@ func finishGame(samples []Sample, actions []int, final board.FinalResult) *Game 
 		Winner:     winner,
 		TotalMoves: len(actions),
 	}
+}
+
+func blendValue(terminalValue, mctsValue, weight float32) float32 {
+	if weight <= 0 {
+		return terminalValue
+	}
+	if mctsValue < -1 {
+		mctsValue = -1
+	} else if mctsValue > 1 {
+		mctsValue = 1
+	}
+	if weight >= 1 {
+		return mctsValue
+	}
+	return (1-weight)*terminalValue + weight*mctsValue
 }
 
 func failure(status Status, moves int, lastAction int, err error) Result {
